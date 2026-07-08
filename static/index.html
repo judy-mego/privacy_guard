@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PII Redactor — local</title>
+<style>
+  :root { --bg:#0a0e14; --card:#111823; --border:#1f2a38; --text:#e6edf3; --muted:#8b98a9;
+          --accent:#10a37f; --accent2:#4fd1b5; --red:#f43f5e; --orange:#fb923c; --yellow:#fbbf24; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); font-family:'Segoe UI',system-ui,sans-serif; min-height:100vh; }
+  .wrap { max-width:1080px; margin:0 auto; padding:30px 20px 70px; }
+  header { display:flex; align-items:center; gap:14px; margin-bottom:4px; }
+  .logo { width:42px; height:42px; border-radius:10px; background:linear-gradient(135deg,var(--accent),var(--accent2)); display:flex; align-items:center; justify-content:center; font-size:22px; }
+  h1 { font-size:1.5rem; } h1 span { color:var(--accent2); }
+  .badge { margin-left:auto; font-size:.72rem; padding:3px 11px; border-radius:99px; border:1px solid var(--accent); color:var(--accent2); }
+  .sub { color:var(--muted); margin:6px 0 24px; font-size:.92rem; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  .panel { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:18px; }
+  .panel h2 { font-size:.8rem; text-transform:uppercase; letter-spacing:1px; color:var(--accent2); margin-bottom:10px; display:flex; align-items:center; gap:8px; }
+  textarea { width:100%; height:230px; background:#0d1420; color:#c8d4e0; border:1px solid var(--border); border-radius:10px; padding:12px; font-size:.9rem; resize:vertical; font-family:inherit; line-height:1.5; }
+  .clean-box { width:100%; height:230px; background:#0d1420; border:1px solid var(--border); border-radius:10px; padding:12px; font-size:.9rem; overflow-y:auto; line-height:1.5; white-space:pre-wrap; }
+  .tok { background:rgba(16,163,127,.18); color:var(--accent2); border-radius:4px; padding:0 4px; font-weight:600; font-size:.85em; }
+  .row { display:flex; gap:12px; margin-top:14px; flex-wrap:wrap; align-items:center; }
+  button { padding:11px 22px; border-radius:9px; border:none; font-weight:600; cursor:pointer; font-size:.9rem; }
+  .primary { background:linear-gradient(90deg,var(--accent),#0d8a6a); color:#fff; }
+  .ghost { background:transparent; border:1px solid var(--border); color:var(--text); }
+  .ghost:hover { border-color:var(--accent); }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  .tier { margin:18px 0; border-radius:12px; padding:14px 18px; font-size:.9rem; display:flex; gap:12px; align-items:flex-start; }
+  .tier .n { font-weight:800; font-size:1.1rem; white-space:nowrap; }
+  .tier.t1 { background:rgba(16,163,127,.10); border:1px solid rgba(16,163,127,.35); }
+  .tier.t1 .n { color:var(--accent2); }
+  .tier.t2 { background:rgba(251,191,36,.10); border:1px solid rgba(251,191,36,.35); }
+  .tier.t2 .n { color:var(--yellow); }
+  .tier.t3 { background:rgba(244,63,94,.10); border:1px solid rgba(244,63,94,.4); }
+  .tier.t3 .n { color:var(--red); }
+  .ents { margin-top:16px; }
+  .ents table { width:100%; border-collapse:collapse; font-size:.85rem; }
+  .ents th { text-align:left; color:var(--muted); padding:6px 8px; border-bottom:1px solid var(--border); font-size:.72rem; text-transform:uppercase; letter-spacing:.5px; }
+  .ents td { padding:6px 8px; border-bottom:1px solid #16202e; }
+  .ents .lab { font-family:Consolas,monospace; color:var(--accent2); font-size:.8rem; }
+  .hidden { display:none; }
+  .hint { color:var(--muted); font-size:.82rem; margin-left:auto; }
+  .copied { color:var(--accent2); font-size:.82rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="logo">🔒</div>
+    <h1>PII <span>Redactor</span></h1>
+    <span class="badge" id="badge">100% local · nada sale de tu equipo</span>
+  </header>
+  <p class="sub">Pega texto con datos sensibles (notas de reunión, incidencias…). Se anonimiza <b>en tu ordenador</b> — luego copias el texto limpio y lo pegas en ChatGPT, Claude o donde quieras. Nada se envía fuera. Por Judith Medina González.</p>
+
+  <div class="grid">
+    <div class="panel">
+      <h2>1 · Texto original (privado)</h2>
+      <textarea id="input" placeholder="Pega aquí tus notas con nombres, DNI, tarjetas, emails, teléfonos, IBAN…"></textarea>
+      <input type="text" id="terms" placeholder="Nombres a ocultar siempre (empresas, proyectos…), separados por comas"
+             style="width:100%; margin-top:10px; background:#0d1420; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:9px 12px; font-size:.85rem;">
+      <div class="row">
+        <button class="ghost" id="sampleBtn">Ejemplo</button>
+        <button class="primary" id="redactBtn">Anonimizar</button>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>2 · Texto limpio (para el LLM)</h2>
+      <div class="clean-box" id="clean"><span style="color:var(--muted)">El resultado aparecerá aquí…</span></div>
+      <div class="row">
+        <button class="primary" id="copyBtn" disabled>Copiar limpio</button>
+        <span class="copied hidden" id="copied">✓ copiado</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="tier hidden" id="tier"><span class="n" id="tierN"></span><span id="tierMsg"></span></div>
+
+  <div class="panel ents hidden" id="entsPanel">
+    <h2>Datos detectados y sustituidos</h2>
+    <table><thead><tr><th>Token</th><th>Tipo</th><th>Valor real (solo en tu equipo)</th></tr></thead><tbody id="entsBody"></tbody></table>
+  </div>
+
+  <div class="panel hidden" id="rehydratePanel" style="margin-top:16px;">
+    <h2>3 · Rehidratar la respuesta (opcional)</h2>
+    <p class="sub" style="margin:0 0 10px;">Pega aquí la respuesta del LLM (con los tokens) para recuperar los valores reales en tu equipo.</p>
+    <textarea id="answer" style="height:120px" placeholder="Pega la respuesta del LLM con los [TOKENS]…"></textarea>
+    <div class="row"><button class="ghost" id="rehydrateBtn">Recuperar valores</button></div>
+    <div class="clean-box hidden" id="rehydrated" style="height:auto; min-height:60px; margin-top:12px;"></div>
+  </div>
+</div>
+
+<script>
+let lastMapping = {};
+const SAMPLE = "Reunión con Banco Acme S.L. sobre la incidencia del cliente Sr. Juan Pérez, DNI 12345678Z, tarjeta 4111 1111 1111 1111, email juan.perez@bancoacme.es, tel. 612 345 678. El proyecto interno se llama Fénix y el servidor afectado fue 10.20.30.40.";
+
+fetch('/api/health').then(r=>r.json()).then(h=>{ if(h.local_only) document.getElementById('badge').textContent='100% local · nada sale de tu equipo'; });
+
+document.getElementById('sampleBtn').onclick = () => {
+  document.getElementById('input').value = SAMPLE;
+  document.getElementById('terms').value = 'Fénix';
+};
+
+function escapeHtml(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function highlightTokens(s){ return escapeHtml(s).replace(/\[[A-Z]+_\d+\]/g, m=>'<span class="tok">'+m+'</span>'); }
+
+document.getElementById('redactBtn').onclick = async () => {
+  const text = document.getElementById('input').value;
+  if(!text.trim()) return;
+  const custom_terms = document.getElementById('terms').value.split(',').map(s=>s.trim()).filter(Boolean);
+  const r = await fetch('/api/redact',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text,custom_terms})});
+  const d = await r.json();
+  lastMapping = d.mapping;
+  document.getElementById('clean').innerHTML = highlightTokens(d.clean);
+  document.getElementById('copyBtn').disabled = false;
+  // tier
+  const tier = document.getElementById('tier');
+  tier.className = 'tier t'+d.tier;
+  document.getElementById('tierN').textContent = 'NIVEL '+d.tier;
+  document.getElementById('tierMsg').textContent = d.tier_reason;
+  tier.classList.remove('hidden');
+  // entities
+  const body = document.getElementById('entsBody');
+  if(d.entities.length){
+    body.innerHTML = d.entities.map(e=>`<tr><td class="lab">${e.token}</td><td>${e.label}</td><td>${escapeHtml(e.value)}</td></tr>`).join('');
+    document.getElementById('entsPanel').classList.remove('hidden');
+    document.getElementById('rehydratePanel').classList.remove('hidden');
+  } else {
+    document.getElementById('entsPanel').classList.add('hidden');
+  }
+};
+
+document.getElementById('copyBtn').onclick = () => {
+  const text = document.getElementById('clean').textContent;
+  navigator.clipboard.writeText(text);
+  const c = document.getElementById('copied'); c.classList.remove('hidden'); setTimeout(()=>c.classList.add('hidden'),1500);
+};
+
+document.getElementById('rehydrateBtn').onclick = async () => {
+  const text = document.getElementById('answer').value;
+  if(!text.trim()) return;
+  const r = await fetch('/api/rehydrate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text,mapping:lastMapping})});
+  const d = await r.json();
+  const out = document.getElementById('rehydrated');
+  out.textContent = d.text; out.classList.remove('hidden');
+};
+</script>
+</body>
+</html>
