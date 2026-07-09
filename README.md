@@ -28,6 +28,7 @@ Spanish + international identifiers, all with deterministic rules:
 - **Person names** (honorific-triggered: "Sr. / Dña. / Mr. / Dr. …" — high precision by design)
 - **Company names** two ways: by **legal suffix** (`S.L.`, `S.A.`, `Inc.`, `Ltd`, `GmbH`, `B.V.`, `LLC`…) and by a **custom terms list** you provide (the client's name, a project codename, your own company) — always redacted, case-insensitive. This is the most reliable route because you know exactly what to hide.
 - **Proper names without a title** (optional NER): install spaCy + the Spanish model to catch person and company names that have no honorific ("María llamó a Iberdrola"). Fully offline. Without it, the tool still runs on honorifics + suffixes + custom terms.
+  - **Precision-filtered:** NER output is only accepted if the entity is tagged as a **proper noun (PROPN)** by the POS tagger and isn't a common word — this removes the verbs, adverbs and sentence-initial words the small model over-flags ("También", "Quiero", "Tenemos"…). Use the **medium** model (`es_core_news_md`) for noticeably better accuracy than the small one.
 
 ## Dummy replacement + local legend
 

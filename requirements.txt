@@ -4,5 +4,7 @@ pydantic>=2.9
 
 # Optional: broader name/company detection (person & org names without a title).
 # Install to enable NER; the tool works without it (honorifics + suffixes + custom terms).
-#   pip install spacy && python -m spacy download es_core_news_sm
+# The MEDIUM model is much more precise than the small one — recommended:
+#   pip install spacy && python -m spacy download es_core_news_md
+# (the small model es_core_news_sm also works but over-flags more common words)
 # spacy>=3.7

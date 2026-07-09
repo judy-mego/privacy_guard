@@ -45,10 +45,62 @@ def _get_nlp():
     _nlp_tried = True
     try:
         import spacy
-        _nlp = spacy.load("es_core_news_sm")
+        # Prefer the more accurate medium model; fall back to small if that's what's installed.
+        for model in ("es_core_news_md", "es_core_news_sm"):
+            try:
+                _nlp = spacy.load(model)
+                break
+            except Exception:
+                continue
     except Exception:
         _nlp = None
     return _nlp
+
+
+# Common Spanish words the small NER model frequently mis-tags as names/orgs.
+# Anything here is never treated as a proper name, even if NER flags it.
+_NER_STOPWORDS = {
+    "también", "tenemos", "quiero", "seguro", "claro", "bueno", "está", "sino",
+    "yo", "creo", "quedado", "tienes", "venía", "vendría", "veníría", "exacto",
+    "toda", "todo", "hola", "gracias", "saludos", "buenos", "buenas", "vale",
+    "entonces", "además", "aunque", "porque", "cuando", "donde", "como", "esto",
+    "eso", "aquello", "nada", "algo", "mucho", "poco", "siempre", "nunca",
+    "hoy", "ayer", "mañana", "ahora", "luego", "them", "ward", "gentnet",
+    "gisen", "pukai", "veniría", "bizum", "siem",
+}
+
+
+def _ner_entities(text: str):
+    """Return [(label, text)] for high-confidence person/company names only.
+
+    Filters aggressively for PRECISION: an entity must be tagged as a proper noun
+    (PROPN) by the POS tagger and not be a common word. This removes the verbs,
+    adverbs and sentence-initial words the small model over-flags.
+    """
+    nlp = _get_nlp()
+    if nlp is None:
+        return []
+    out = []
+    for ent in nlp(text).ents:
+        if ent.label_ not in ("PER", "PERSON", "ORG"):
+            continue
+        txt = ent.text.strip()
+        if len(txt) < 3:
+            continue
+        # must be an actual proper noun, not a verb/adverb mis-tagged as a name
+        if ent.root.pos_ != "PROPN":
+            continue
+        # drop common words and single-token entries that are just capitalized words
+        words = txt.split()
+        if any(w.lower() in _NER_STOPWORDS for w in words):
+            continue
+        # single-token PERSON names are risky; require it to look like a name
+        # (title-case, alphabetic). Multi-token always allowed.
+        if len(words) == 1 and not (txt[0].isupper() and txt[1:].islower() and txt.isalpha()):
+            continue
+        label = "NAME" if ent.label_ in ("PER", "PERSON") else "ORG"
+        out.append((label, txt))
+    return out
 
 
 # ---------------------------------------------------------------- detectors
@@ -152,16 +204,10 @@ def redact(text: str, min_phone_len: int = 9, custom_terms=None, use_ner: bool =
     for term in sorted(filter(None, (t.strip() for t in (custom_terms or []))), key=len, reverse=True):
         clean = replace_exact(clean, term, "ORG")
 
-    # 1) NER (optional): person + company names without a title
+    # 1) NER (optional): person + company names without a title, precision-filtered
     if use_ner:
-        nlp = _get_nlp()
-        if nlp is not None:
-            ents = sorted(nlp(text).ents, key=lambda e: len(e.text), reverse=True)
-            for ent in ents:
-                if ent.label_ in ("PER", "PERSON"):
-                    clean = replace_exact(clean, ent.text, "NAME")
-                elif ent.label_ == "ORG":
-                    clean = replace_exact(clean, ent.text, "ORG")
+        for label, value in sorted(_ner_entities(text), key=lambda lv: len(lv[1]), reverse=True):
+            clean = replace_exact(clean, value, label)
 
     # 2) Honorific-triggered names (title + name)
     def _name_sub(m):
