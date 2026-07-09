@@ -19,6 +19,38 @@ Everything here is deterministic regex + checksum validation. No dependency.
 
 import re
 
+# ---------------------------------------------------------------- dummy pools
+
+# Realistic fake values so the clean text reads naturally for an LLM.
+DUMMY_NAMES = [
+    "Carlos Gómez", "Elena Ruiz", "Miguel Torres", "Laura Sánchez", "David Moreno",
+    "Ana Castro", "Javier Díaz", "Marta Vidal", "Sergio Romero", "Lucía Navarro",
+    "Pablo Herrero", "Sofía Ramos", "Andrés Gil", "Clara Ortega", "Raúl Márquez",
+]
+DUMMY_ORGS = [
+    "Empresa Delta", "Compañía Norte", "Grupo Ibérica", "Corporación Vega",
+    "Sociedad Aurora", "Industrias Meridian", "Global Ceningsa", "Grupo Altair",
+]
+
+# NER model is optional. If spaCy + the Spanish model are installed, name/company
+# recall improves a lot. If not, we fall back to honorific + suffix + custom terms.
+_nlp = None
+_nlp_tried = False
+
+
+def _get_nlp():
+    global _nlp, _nlp_tried
+    if _nlp_tried:
+        return _nlp
+    _nlp_tried = True
+    try:
+        import spacy
+        _nlp = spacy.load("es_core_news_sm")
+    except Exception:
+        _nlp = None
+    return _nlp
+
+
 # ---------------------------------------------------------------- detectors
 
 def _luhn_ok(number: str) -> bool:
@@ -73,66 +105,96 @@ TIER3_HINTS = re.compile(r"\b(confidential|nda|no[- ]disclosure|under embargo|no
                          r"unreleased|internal only|secreto|confidencial|bajo nda)\b", re.I)
 
 
-def redact(text: str, min_phone_len: int = 9, custom_terms=None) -> dict:
-    """Return {clean, mapping, entities, tier, tier_reason}.
+def redact(text: str, min_phone_len: int = 9, custom_terms=None, use_ner: bool = True) -> dict:
+    """Return {clean, mapping, entities, tier, tier_reason, legend}.
 
-    custom_terms: optional list of exact strings (company names, project codenames,
-    aliases) to always redact as [ORG_n], case-insensitive.
+    Names and companies are replaced with realistic DUMMY values (Juan Pérez →
+    Carlos Gómez); structured identifiers (DNI, card, IBAN…) use [TOKEN]s. The
+    'mapping' (replacement -> original) and 'legend' are LOCAL reference only —
+    never append them to the text you send out.
+
+    custom_terms: exact strings (client, project codename, your own company) to
+      always replace, case-insensitive.
+    use_ner: if True and spaCy + es_core_news_sm are installed, also detect
+      person/company names without a title (higher recall).
     """
-    mapping = {}          # token -> original
-    seen = {}             # original -> token
+    mapping = {}          # replacement -> original
+    seen = {}             # original -> replacement
     counters = {}
     entities = []
 
-    def token_for(label, value):
+    def repl_for(label, value):
         value = value.strip()
         if value in seen:
             return seen[value]
         counters[label] = counters.get(label, 0) + 1
-        tok = f"[{label}_{counters[label]}]"
-        seen[value] = tok
-        mapping[tok] = value
-        entities.append({"label": label, "value": value, "token": tok})
-        return tok
+        n = counters[label]
+        if label == "NAME":
+            rep = DUMMY_NAMES[(n - 1) % len(DUMMY_NAMES)] + ("" if n <= len(DUMMY_NAMES) else f" {n}")
+        elif label == "ORG":
+            rep = DUMMY_ORGS[(n - 1) % len(DUMMY_ORGS)] + ("" if n <= len(DUMMY_ORGS) else f" {n}")
+        else:
+            rep = f"[{label}_{n}]"
+        seen[value] = rep
+        mapping[rep] = value
+        entities.append({"label": label, "value": value, "replacement": rep})
+        return rep
+
+    def replace_exact(clean, value, label):
+        if not value.strip():
+            return clean
+        rx = re.compile(r"(?<!\w)" + re.escape(value.strip()) + r"(?!\w)", re.IGNORECASE)
+        return rx.sub(lambda m, l=label, v=value.strip(): repl_for(l, v), clean)
 
     clean = text
 
     # 0) Custom terms first (user knows exactly what to hide — highest priority)
     for term in sorted(filter(None, (t.strip() for t in (custom_terms or []))), key=len, reverse=True):
-        rx = re.compile(r"(?<!\w)" + re.escape(term) + r"(?!\w)", re.IGNORECASE)
-        clean = rx.sub(lambda m, t=term: token_for("ORG", t), clean)
+        clean = replace_exact(clean, term, "ORG")
 
-    # 1) Names (before generic patterns eat capitals)
+    # 1) NER (optional): person + company names without a title
+    if use_ner:
+        nlp = _get_nlp()
+        if nlp is not None:
+            ents = sorted(nlp(text).ents, key=lambda e: len(e.text), reverse=True)
+            for ent in ents:
+                if ent.label_ in ("PER", "PERSON"):
+                    clean = replace_exact(clean, ent.text, "NAME")
+                elif ent.label_ == "ORG":
+                    clean = replace_exact(clean, ent.text, "ORG")
+
+    # 2) Honorific-triggered names (title + name)
     def _name_sub(m):
-        return m.group(0).replace(m.group(1), token_for("NAME", m.group(1)))
+        return m.group(0).replace(m.group(1), repl_for("NAME", m.group(1)))
     clean = NAME_RE.sub(_name_sub, clean)
 
-    # 2) Company names by legal suffix
-    def _org_sub(m):
-        return token_for("ORG", m.group(0))
-    clean = COMPANY_RE.sub(_org_sub, clean)
+    # 3) Company names by legal suffix
+    clean = COMPANY_RE.sub(lambda m: repl_for("ORG", m.group(0)), clean)
 
-    # 3) Structured detectors
+    # 4) Structured detectors (tokens)
     for label, rx, validator in DETECTORS:
-        def _sub(m):
+        def _sub(m, label=label, validator=validator):
             val = m.group(0)
             if label == "PHONE" and len(re.sub(r"\D", "", val)) < min_phone_len:
                 return val
             if validator and not validator(val):
                 return val
-            return token_for(label, val)
+            return repl_for(label, val)
         clean = rx.sub(_sub, clean)
 
-    # 3) Sensitivity tier suggestion
+    # 5) Sensitivity tier
     if TIER3_HINTS.search(text):
         tier, reason = 3, "Contains confidentiality markers (NDA/confidential/unreleased) — even redacted, this may not be safe to send externally."
     elif entities:
-        tier, reason = 2, "Sensitive identifiers detected and redacted — safe to send the CLEAN text to an external LLM."
+        tier, reason = 2, "Sensitive identifiers detected and replaced — safe to send the CLEAN text to an external LLM."
     else:
         tier, reason = 1, "No sensitive identifiers detected — low risk. Still review context before sending."
 
+    # Local legend (real ↔ dummy) — for YOUR reference / rehydration. DO NOT SEND.
+    legend = [{"replacement": e["replacement"], "original": e["value"], "type": e["label"]} for e in entities]
+
     return {"clean": clean, "mapping": mapping, "entities": entities,
-            "tier": tier, "tier_reason": reason}
+            "tier": tier, "tier_reason": reason, "legend": legend}
 
 
 def rehydrate(text: str, mapping: dict) -> str:
@@ -149,8 +211,8 @@ if __name__ == "__main__":
     # custom_terms: nombres/alias que solo tú conoces (cliente, proyecto…)
     r = redact(sample, custom_terms=["Fénix"])
     print("ORIGINAL:\n", sample)
-    print("\nCLEAN:\n", r["clean"])
+    print("\nCLEAN (para pegar en el LLM):\n", r["clean"])
     print(f"\nTIER {r['tier']}: {r['tier_reason']}")
-    print("\nENTITIES:")
-    for e in r["entities"]:
-        print(f"  {e['token']} = {e['value']}")
+    print("\nLEYENDA (solo para ti — NO enviar):")
+    for e in r["legend"]:
+        print(f"  {e['replacement']}  ←  {e['original']}  ({e['type']})")

@@ -78,8 +78,10 @@
   <div class="tier hidden" id="tier"><span class="n" id="tierN"></span><span id="tierMsg"></span></div>
 
   <div class="panel ents hidden" id="entsPanel">
-    <h2>Datos detectados y sustituidos</h2>
-    <table><thead><tr><th>Token</th><th>Tipo</th><th>Valor real (solo en tu equipo)</th></tr></thead><tbody id="entsBody"></tbody></table>
+    <h2>🔑 Leyenda — solo para ti · NO enviar</h2>
+    <p class="sub" style="margin:0 0 10px;">Referencia local para revertir. Nunca se pega al texto que envías al LLM.</p>
+    <table><thead><tr><th>Reemplazo (en el texto)</th><th>Tipo</th><th>Valor real (solo en tu equipo)</th></tr></thead><tbody id="entsBody"></tbody></table>
+    <div class="row"><button class="ghost" id="copyLegend">Copiar leyenda</button><span class="copied hidden" id="copiedLegend">✓ copiado</span></div>
   </div>
 
   <div class="panel hidden" id="rehydratePanel" style="margin-top:16px;">
@@ -103,7 +105,17 @@ document.getElementById('sampleBtn').onclick = () => {
 };
 
 function escapeHtml(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-function highlightTokens(s){ return escapeHtml(s).replace(/\[[A-Z]+_\d+\]/g, m=>'<span class="tok">'+m+'</span>'); }
+function highlightClean(s, entities){
+  let h = escapeHtml(s);
+  // highlight structured tokens
+  h = h.replace(/\[[A-Z]+_\d+\]/g, m=>'<span class="tok">'+m+'</span>');
+  // highlight dummy replacements (names/orgs)
+  (entities||[]).filter(e=>e.label==='NAME'||e.label==='ORG').forEach(e=>{
+    const rep = escapeHtml(e.replacement).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+    h = h.replace(new RegExp('(?<![\\w>])'+rep+'(?![\\w<])','g'), '<span class="tok">'+escapeHtml(e.replacement)+'</span>');
+  });
+  return h;
+}
 
 document.getElementById('redactBtn').onclick = async () => {
   const text = document.getElementById('input').value;
@@ -112,7 +124,7 @@ document.getElementById('redactBtn').onclick = async () => {
   const r = await fetch('/api/redact',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text,custom_terms})});
   const d = await r.json();
   lastMapping = d.mapping;
-  document.getElementById('clean').innerHTML = highlightTokens(d.clean);
+  document.getElementById('clean').innerHTML = highlightClean(d.clean, d.entities);
   document.getElementById('copyBtn').disabled = false;
   // tier
   const tier = document.getElementById('tier');
@@ -123,12 +135,20 @@ document.getElementById('redactBtn').onclick = async () => {
   // entities
   const body = document.getElementById('entsBody');
   if(d.entities.length){
-    body.innerHTML = d.entities.map(e=>`<tr><td class="lab">${e.token}</td><td>${e.label}</td><td>${escapeHtml(e.value)}</td></tr>`).join('');
+    body.innerHTML = d.entities.map(e=>`<tr><td class="lab">${escapeHtml(e.replacement)}</td><td>${e.label}</td><td>${escapeHtml(e.value)}</td></tr>`).join('');
     document.getElementById('entsPanel').classList.remove('hidden');
     document.getElementById('rehydratePanel').classList.remove('hidden');
+    lastLegend = d.legend;
   } else {
     document.getElementById('entsPanel').classList.add('hidden');
   }
+};
+
+let lastLegend = [];
+document.getElementById('copyLegend').onclick = () => {
+  const txt = 'LEYENDA (solo para ti — NO enviar)\n' + lastLegend.map(e=>`${e.replacement}  ←  ${e.original}  (${e.type})`).join('\n');
+  navigator.clipboard.writeText(txt);
+  const c = document.getElementById('copiedLegend'); c.classList.remove('hidden'); setTimeout(()=>c.classList.add('hidden'),1500);
 };
 
 document.getElementById('copyBtn').onclick = () => {

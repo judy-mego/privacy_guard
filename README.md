@@ -27,6 +27,13 @@ Spanish + international identifiers, all with deterministic rules:
 - **IBAN**, **email**, **phone** (Spanish + international formats), **IP address**, **URL**
 - **Person names** (honorific-triggered: "Sr. / Dña. / Mr. / Dr. …" — high precision by design)
 - **Company names** two ways: by **legal suffix** (`S.L.`, `S.A.`, `Inc.`, `Ltd`, `GmbH`, `B.V.`, `LLC`…) and by a **custom terms list** you provide (the client's name, a project codename, your own company) — always redacted, case-insensitive. This is the most reliable route because you know exactly what to hide.
+- **Proper names without a title** (optional NER): install spaCy + the Spanish model to catch person and company names that have no honorific ("María llamó a Iberdrola"). Fully offline. Without it, the tool still runs on honorifics + suffixes + custom terms.
+
+## Dummy replacement + local legend
+
+Person and company names are swapped for **realistic dummy values** (`Juan Pérez → Carlos Gómez`, `Banco Acme S.L. → Compañía Norte`) so the clean text reads naturally for the LLM. Structured identifiers (DNI, card, IBAN) become tokens (`[DNI_1]`).
+
+A **legend** (real ↔ dummy) is shown for your reference and to reverse the LLM's answer — but it stays **local**. It is never appended to the text you send out, so the real values never leave your machine. When the model replies using the dummy names, `rehydrate()` swaps them back to the real ones.
 
 Everything is regex + checksum validation. Detection quality is measured — see `eval.py`.
 
@@ -45,10 +52,10 @@ Command-line / library use:
 import redactor
 r = redactor.redact("Reunión con Banco Acme S.L. y el Sr. Juan Pérez sobre el proyecto Fénix",
                     custom_terms=["Fénix"])
-print(r["clean"])     # "Reunión con [ORG_2] y el Sr. [NAME_1] sobre el proyecto [ORG_1]"
-print(r["tier"])      # 2
-# later, put real values back into the LLM's answer:
-redactor.rehydrate("Escrito a [NAME_1]", r["mapping"])   # "Escrito a Juan Pérez"
+print(r["clean"])   # "Reunión con Compañía Norte y el Sr. Carlos Gómez sobre el proyecto Empresa Delta"
+print(r["legend"])  # local reference: dummy ↔ real (do NOT send)
+# after the LLM answers using the dummy names, put the real ones back:
+redactor.rehydrate("Escrito a Carlos Gómez", r["mapping"])   # "Escrito a Juan Pérez"
 ```
 
 ## Evals

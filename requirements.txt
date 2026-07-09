@@ -1,3 +1,8 @@
 fastapi>=0.115
 uvicorn>=0.32
 pydantic>=2.9
+
+# Optional: broader name/company detection (person & org names without a title).
+# Install to enable NER; the tool works without it (honorifics + suffixes + custom terms).
+#   pip install spacy && python -m spacy download es_core_news_sm
+# spacy>=3.7
