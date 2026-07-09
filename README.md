@@ -35,6 +35,10 @@ Person and company names are swapped for **realistic dummy values** (`Juan Pére
 
 A **legend** (real ↔ dummy) is shown for your reference and to reverse the LLM's answer — but it stays **local**. It is never appended to the text you send out, so the real values never leave your machine. When the model replies using the dummy names, `rehydrate()` swaps them back to the real ones.
 
+## Granular control: keep or restore each item
+
+Each detected item has a **"keep anonymized" checkbox** in the legend. Uncheck one and its real value returns to its exact position in the clean text — useful when something isn't actually sensitive (a public company, a well-known name you *want* the model to see). Restored real values are highlighted in **red** and a warning shows how many are now exposed, so you always know exactly what will leave your machine before you copy.
+
 Everything is regex + checksum validation. Detection quality is measured — see `eval.py`.
 
 ## Quickstart

@@ -21,6 +21,8 @@
   textarea { width:100%; height:230px; background:#0d1420; color:#c8d4e0; border:1px solid var(--border); border-radius:10px; padding:12px; font-size:.9rem; resize:vertical; font-family:inherit; line-height:1.5; }
   .clean-box { width:100%; height:230px; background:#0d1420; border:1px solid var(--border); border-radius:10px; padding:12px; font-size:.9rem; overflow-y:auto; line-height:1.5; white-space:pre-wrap; }
   .tok { background:rgba(16,163,127,.18); color:var(--accent2); border-radius:4px; padding:0 4px; font-weight:600; font-size:.85em; }
+  .tok-real { background:rgba(244,63,94,.18); color:#f43f5e; border-radius:4px; padding:0 4px; font-weight:600; font-size:.85em; }
+  .expose-warn { margin-top:10px; font-size:.82rem; color:#f43f5e; display:flex; align-items:center; gap:6px; }
   .row { display:flex; gap:12px; margin-top:14px; flex-wrap:wrap; align-items:center; }
   button { padding:11px 22px; border-radius:9px; border:none; font-weight:600; cursor:pointer; font-size:.9rem; }
   .primary { background:linear-gradient(90deg,var(--accent),#0d8a6a); color:#fff; }
@@ -68,6 +70,7 @@
     <div class="panel">
       <h2>2 · Texto limpio (para el LLM)</h2>
       <div class="clean-box" id="clean"><span style="color:var(--muted)">El resultado aparecerá aquí…</span></div>
+      <div class="expose-warn hidden" id="exposeWarn">⚠️ <span id="exposeCount">0</span> valor(es) real(es) visible(s) — se enviarán al LLM (en rojo abajo)</div>
       <div class="row">
         <button class="primary" id="copyBtn" disabled>Copiar limpio</button>
         <span class="copied hidden" id="copied">✓ copiado</span>
@@ -79,8 +82,8 @@
 
   <div class="panel ents hidden" id="entsPanel">
     <h2>🔑 Leyenda — solo para ti · NO enviar</h2>
-    <p class="sub" style="margin:0 0 10px;">Referencia local para revertir. Nunca se pega al texto que envías al LLM.</p>
-    <table><thead><tr><th>Reemplazo (en el texto)</th><th>Tipo</th><th>Valor real (solo en tu equipo)</th></tr></thead><tbody id="entsBody"></tbody></table>
+    <p class="sub" style="margin:0 0 10px;">Marca lo que quieres mantener anónimo. Si desmarcas una casilla, su valor real vuelve al texto en su sitio (y se enviará al LLM).</p>
+    <table><thead><tr><th style="width:64px; text-align:center;">Anónimo</th><th>Reemplazo (en el texto)</th><th>Tipo</th><th>Valor real (solo en tu equipo)</th></tr></thead><tbody id="entsBody"></tbody></table>
     <div class="row"><button class="ghost" id="copyLegend">Copiar leyenda</button><span class="copied hidden" id="copiedLegend">✓ copiado</span></div>
   </div>
 
@@ -117,6 +120,39 @@ function highlightClean(s, entities){
   return h;
 }
 
+let baseClean = "";      // fully-anonymized text from the server
+let currentEntities = []; // each: {label, value, replacement, keep}
+
+function escapeRe(s){ return s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'); }
+
+// Rebuild the clean text honoring each entity's keep-anonymized state.
+function recomputeClean(){
+  let text = baseClean;
+  const restored = [];
+  currentEntities.forEach(e => {
+    if(!e.keep){
+      // put the REAL value back in its place
+      text = text.replace(new RegExp('(?<![\\w])'+escapeRe(e.replacement)+'(?![\\w])','g'), e.value);
+      restored.push(e.value);
+    }
+  });
+  // highlight: anonymized replacements green, restored real values red (will be sent!)
+  let h = escapeHtml(text);
+  h = h.replace(/\[[A-Z]+_\d+\]/g, m=>'<span class="tok">'+m+'</span>');
+  currentEntities.forEach(e => {
+    const target = e.keep ? e.replacement : e.value;
+    if(e.label!=='NAME' && e.label!=='ORG' && e.keep) return; // tokens already highlighted
+    const cls = e.keep ? 'tok' : 'tok-real';
+    h = h.replace(new RegExp('(?<![\\w>])'+escapeRe(target)+'(?![\\w<])','g'), '<span class="'+cls+'">'+escapeHtml(target)+'</span>');
+  });
+  document.getElementById('clean').innerHTML = h;
+  // copy uses plain text version
+  document.getElementById('clean').dataset.plain = text;
+  // warn if any real value is now exposed
+  document.getElementById('exposeWarn').classList.toggle('hidden', restored.length===0);
+  document.getElementById('exposeCount').textContent = restored.length;
+}
+
 document.getElementById('redactBtn').onclick = async () => {
   const text = document.getElementById('input').value;
   if(!text.trim()) return;
@@ -124,7 +160,8 @@ document.getElementById('redactBtn').onclick = async () => {
   const r = await fetch('/api/redact',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text,custom_terms})});
   const d = await r.json();
   lastMapping = d.mapping;
-  document.getElementById('clean').innerHTML = highlightClean(d.clean, d.entities);
+  baseClean = d.clean;
+  currentEntities = d.entities.map(e => ({...e, keep: true}));
   document.getElementById('copyBtn').disabled = false;
   // tier
   const tier = document.getElementById('tier');
@@ -132,16 +169,26 @@ document.getElementById('redactBtn').onclick = async () => {
   document.getElementById('tierN').textContent = 'NIVEL '+d.tier;
   document.getElementById('tierMsg').textContent = d.tier_reason;
   tier.classList.remove('hidden');
-  // entities
+  // entities with keep-anonymized checkbox
   const body = document.getElementById('entsBody');
   if(d.entities.length){
-    body.innerHTML = d.entities.map(e=>`<tr><td class="lab">${escapeHtml(e.replacement)}</td><td>${e.label}</td><td>${escapeHtml(e.value)}</td></tr>`).join('');
+    body.innerHTML = currentEntities.map((e,i)=>
+      `<tr>
+        <td style="text-align:center;"><input type="checkbox" data-i="${i}" class="keepChk" checked title="Mantener anónimo"></td>
+        <td class="lab">${escapeHtml(e.replacement)}</td>
+        <td>${e.label}</td>
+        <td>${escapeHtml(e.value)}</td>
+      </tr>`).join('');
+    document.querySelectorAll('.keepChk').forEach(chk => {
+      chk.onchange = () => { currentEntities[+chk.dataset.i].keep = chk.checked; recomputeClean(); };
+    });
     document.getElementById('entsPanel').classList.remove('hidden');
     document.getElementById('rehydratePanel').classList.remove('hidden');
     lastLegend = d.legend;
   } else {
     document.getElementById('entsPanel').classList.add('hidden');
   }
+  recomputeClean();
 };
 
 let lastLegend = [];
@@ -152,7 +199,7 @@ document.getElementById('copyLegend').onclick = () => {
 };
 
 document.getElementById('copyBtn').onclick = () => {
-  const text = document.getElementById('clean').textContent;
+  const text = document.getElementById('clean').dataset.plain || document.getElementById('clean').textContent;
   navigator.clipboard.writeText(text);
   const c = document.getElementById('copied'); c.classList.remove('hidden'); setTimeout(()=>c.classList.add('hidden'),1500);
 };
